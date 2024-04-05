@@ -14,18 +14,16 @@
 #include <cerrno>
 #include <functional>
 #include <string>
+#include <thread>
 
-#ifndef DEFAULT_BUFFER_SIZE
-#define DEFAULT_BUFFER_SIZE 0x1000 /*4096 bytes*/
-#endif
+#include "thread_safe_queue.h"
+
 
 namespace socket_server {
-enum SocketType { TCP = SOCK_STREAM, UDP = SOCK_DGRAM };
 
 class Server {
   public:
-    Server(SocketType type, uint16_t port)
-        : server_fd(0), server_type(type), server_port(port){};
+    Server(uint16_t port, int thread_num) : server_fd(0), server_port(port), work_thread_num(thread_num){};
     ~Server();
 
     Server() = delete;
@@ -35,17 +33,33 @@ class Server {
 
   private:
     int server_fd;
-    SocketType server_type;
     uint16_t server_port;
+    static bool is_running;
+
+    thread_safe_queue::Queue<int> session_queue;
+
+    int work_thread_num;
+    std::thread accept_thread;
+    std::vector<std::thread> work_thread;
 
     const int kMaxTcpListen = 128;
+    const int kDefaultBufferSize = 4096;
 
+  private:
     void SetSockOption();
 
+    static std::string IpToString(const sockaddr_in& addr);
+    static std::string IdToString(const std::thread::id thread_id);
+
   public:
-    void Open();
-    void Close() const;
+    void Bind();
+    void Listen();
+    void RunServer();
+    void Close();
     void Accept();
+    void WorkCommunication();
+
+    static void SignalHandler(int signum);
 };
 
 }  // namespace socket_server
