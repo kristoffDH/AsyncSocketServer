@@ -12,18 +12,27 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <exception>
 #include <functional>
 #include <string>
 #include <thread>
 
 #include "thread_safe_queue.h"
 
-
 namespace socket_server {
+class Exception : public std::exception {
+  private:
+    std::string message;
+
+  public:
+    explicit Exception(std::string message) : message(message) {}
+    std::string_view what() { return message; }
+};
 
 class Server {
   public:
-    Server(uint16_t port, int thread_num) : server_fd(0), server_port(port), work_thread_num(thread_num){};
+    Server(uint16_t port, int thread_num)
+        : server_fd(0), server_port(port), work_thread_num(thread_num){};
     ~Server();
 
     Server() = delete;
@@ -45,21 +54,24 @@ class Server {
     const int kMaxTcpListen = 128;
     const int kDefaultBufferSize = 4096;
 
+  public:
+    std::function<void(std::string, int)> on_communication;
+    std::function<void(std::string, Exception)> on_error_handle;
+
   private:
     void SetSockOption();
-
-    static std::string IpToString(const sockaddr_in& addr);
-    static std::string IdToString(const std::thread::id thread_id);
+    void WorkCommunication();
 
   public:
     void Bind();
     void Listen();
     void RunServer();
-    void Close();
     void Accept();
-    void WorkCommunication();
+    void Close();
 
     static void SignalHandler(int signum);
+    static std::string IpToString(const sockaddr_in& addr);
+    static std::string IdToString(const std::thread::id thread_id);
 };
 
 }  // namespace socket_server

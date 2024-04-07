@@ -4,17 +4,12 @@
 
 #include "socket_server.h"
 
-#include "spdlog/spdlog.h"
-
 #include <sstream>
+
+#include "spdlog/spdlog.h"
 
 namespace socket_server {
 bool Server::is_running = false;
-
-void Server::SignalHandler(int signum) {
-    spdlog::warn("Receive signal {}.", signum);
-    is_running = false;
-}
 
 Server::~Server() {}
 
@@ -78,6 +73,35 @@ void Server::SetSockOption() {
     }
 }
 
+void Server::WorkCommunication() {
+    auto thread_id = IdToString(std::this_thread::get_id());
+
+    spdlog::info("[{}] Start thread.", thread_id);
+
+    while (is_running) {
+        int client_fd = session_queue.Pop();
+
+        if (client_fd == -1) {
+            spdlog::info("[{}] server is stop.", thread_id);
+            continue;
+        }
+
+        try {
+            if(on_communication != nullptr) {
+                on_communication(thread_id, client_fd);
+            }
+        }
+        catch(Exception & e) {
+            if(on_error_handle != nullptr) {
+                on_error_handle(thread_id, e);
+            }
+        }
+
+        close(client_fd);
+        spdlog::debug("[{}] Client Disconnect.", thread_id);
+    }
+}
+
 void Server::Bind() {
     struct sockaddr_in sock_in_addr {};
 
@@ -121,34 +145,6 @@ void Server::RunServer() {
     Close();
 }
 
-void Server::Close() {
-    is_running = false;
-
-    while (!session_queue.IsEmpty()) {
-        int client_fd = session_queue.Pop();
-        spdlog::debug("client fd {} close...", client_fd);
-        close(client_fd);
-    }
-
-    spdlog::debug("server_fd Close");
-    close(server_fd);
-}
-
-std::string Server::IpToString(const sockaddr_in &addr) {
-    char ip[INET_ADDRSTRLEN] = {
-        0,
-    };
-    inet_ntop(AF_INET, &(addr.sin_addr), ip, INET_ADDRSTRLEN);
-
-    return std::string(ip);
-}
-
-std::string Server::IdToString(const std::thread::id thread_id) {
-    std::ostringstream ss;
-    ss << std::this_thread::get_id();
-    return ss.str();
-}
-
 void Server::Accept() {
     while (is_running) {
         struct sockaddr_in sock_addr_in {};
@@ -166,36 +162,50 @@ void Server::Accept() {
     }
 }
 
-void Server::WorkCommunication() {
-    auto thread_id = IdToString(std::this_thread::get_id());
+void Server::Close() {
+    is_running = false;
 
-    spdlog::info("[{}] Start thread.", thread_id);
-
-    while (is_running) {
+    while (!session_queue.IsEmpty()) {
         int client_fd = session_queue.Pop();
-
-        char message_buffer[kDefaultBufferSize];
-        int recv_bytes = 0, send_bytes = 0;
-
-        for (int idx = 0; idx < 6; idx++) {
-            recv_bytes =
-                recv(client_fd, &message_buffer, kDefaultBufferSize, 0);
-            if (recv_bytes == 0) {
-                spdlog::warn("[{}] Recv fail. Client is disconnected..", thread_id);
-                break;
-            }
-            spdlog::debug("[{}] Recv data : {}", thread_id, std::string(message_buffer));
-
-            send_bytes = send(client_fd, &message_buffer, recv_bytes, 0);
-            if (send_bytes < 0) {
-                spdlog::warn("[{}] Send fail.", thread_id);
-                break;
-            }
-        }
-
-        spdlog::debug("[{}] Client Disconnect.", thread_id);
+        spdlog::debug("client fd {} close...", client_fd);
         close(client_fd);
     }
+
+    spdlog::debug("server_fd Close");
+    close(server_fd);
+
+    // unlock queue
+    for (int cnt = 0; cnt < work_thread_num; cnt++) {
+        session_queue.Push(-1);
+    }
+
+    // accept, work_thread wait
+    accept_thread.join();
+    for (auto &iter : work_thread) {
+        iter.join();
+    }
+
+    spdlog::debug("accept/work thread is terminated");
+}
+
+void Server::SignalHandler(int signum) {
+    spdlog::warn("Receive signal {}.", signum);
+    is_running = false;
+}
+
+std::string Server::IpToString(const sockaddr_in &addr) {
+    char ip[INET_ADDRSTRLEN] = {
+        0,
+    };
+    inet_ntop(AF_INET, &(addr.sin_addr), ip, INET_ADDRSTRLEN);
+
+    return std::string(ip);
+}
+
+std::string Server::IdToString(const std::thread::id thread_id) {
+    std::ostringstream ss;
+    ss << std::this_thread::get_id();
+    return ss.str();
 }
 
 }  // namespace socket_server
